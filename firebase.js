@@ -1,36 +1,80 @@
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
-let db = null;
+let dbInstance = null;
+let initializationError = null;
 
-export function initializeFirebase() {
-  if (getApps().length > 0) {
-    return getFirestore();
-  }
-
+function validateFirebaseConfig() {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 
   if (!projectId || !clientEmail || !privateKey) {
-    console.warn("Firebase credentials not set. Using in-memory fallback.");
     return null;
   }
 
-  initializeApp({
-    credential: cert({
-      projectId,
-      clientEmail,
-      privateKey,
-    }),
-  });
+  if (!clientEmail.includes("@")) {
+    throw new Error("Invalid Firebase client email");
+  }
 
-  db = getFirestore();
-  return db;
+  return {
+    projectId,
+    clientEmail,
+    privateKey,
+  };
+}
+
+export function initializeFirebase() {
+  if (dbInstance) {
+    return dbInstance;
+  }
+
+  if (initializationError) {
+    console.error("Firebase initialization previously failed");
+    return null;
+  }
+
+  try {
+    const config = validateFirebaseConfig();
+
+    if (!config) {
+      console.warn(
+        "Firebase credentials not set. Using in-memory fallback."
+      );
+      return null;
+    }
+
+    if (getApps().length === 0) {
+      initializeApp({
+        credential: cert({
+          projectId: config.projectId,
+          clientEmail: config.clientEmail,
+          privateKey: config.privateKey,
+        }),
+      });
+    }
+
+    dbInstance = getFirestore();
+
+    return dbInstance;
+  } catch (error) {
+    initializationError = error;
+
+    console.error(
+      "Firebase initialization failed:",
+      error.message
+    );
+
+    return null;
+  }
 }
 
 export function getDb() {
-  return db;
+  return dbInstance;
+}
+
+export function getFirebaseInitializationError() {
+  return initializationError;
 }
 
 export const COLLECTIONS = {
