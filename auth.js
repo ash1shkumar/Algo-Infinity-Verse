@@ -1,6 +1,7 @@
 (function () {
   const privateHashes = new Set(["#dashboard", "#profile"]);
   let currentSession = null;
+  let authReady = false;
 
   function isAuthPage() {
     return location.pathname === "/login" ||
@@ -34,7 +35,12 @@
   }
 
   function guardPrivateHash() {
-    if (privateHashes.has(location.hash) && !currentSession?.authenticated) {
+    if (!authReady) return;
+
+    if (
+      privateHashes.has(location.hash) &&
+      !currentSession?.authenticated
+    ) {
       loginRedirect();
     }
   }
@@ -222,6 +228,7 @@
     if (location.protocol === "file:") {
       renderFileModeError();
       currentSession = { authenticated: false, user: null };
+      authReady = true;
       window.algoAuth = currentSession;
       renderAuthNav();
       wireLogout();
@@ -233,6 +240,7 @@
     }
 
     currentSession = await getSession();
+    authReady = true;
     window.algoAuth = currentSession;
 
     if (currentSession.authenticated && isAuthPage()) {
@@ -244,8 +252,8 @@
     wireLogout();
     wireAuthForm();
     updateProfileNames(currentSession.user);
-    guardPrivateHash();
     window.addEventListener("hashchange", guardPrivateHash);
+    guardPrivateHash();
   });
 })();
 

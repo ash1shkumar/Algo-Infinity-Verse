@@ -1643,26 +1643,15 @@ function updateQuizProgressDisplay(topic) {
 }
 
 function startQuiz(topicKey) {
-  console.log("startQuiz called");
-  console.log("topicKey =", topicKey);
-  console.log("startQuiz called with:", topicKey);
-
-  // Normalize topicKey defensively in case caller passes name/variant.
   const normalizedTopicKey = getQuizTopicKey(String(topicKey));
   const topicQuiz = quizQuestions[normalizedTopicKey];
 
   if (!topicQuiz || topicQuiz.length === 0) {
-    console.error("Quiz data not found for:", {
-      rawTopicKey: topicKey,
-      normalizedTopicKey,
-      availableKeys: Object.keys(quizQuestions),
-    });
+    console.error("Quiz data not found");
     return;
   }
 
-  // Ensure we use the normalized key everywhere below.
   topicKey = normalizedTopicKey;
-
 
   const resultEl = document.getElementById("topicQuizResult");
 
@@ -1670,17 +1659,19 @@ function startQuiz(topicKey) {
     resultEl.classList.add("hidden");
     resultEl.innerHTML = "";
   }
+
   document.getElementById("topicQuizQuestionText").style.display = "block";
   document.getElementById("topicQuizOptions").style.display = "block";
   document.getElementById("topicQuizProgress").style.display = "block";
   document.getElementById("topicQuizCounter").style.display = "block";
-  currentQuiz = {
+
+  QuizManager.start({
     topic: topicKey,
-    questions: [...topicQuiz],
+    questions: shuffleArray([...topicQuiz]),
     currentQuestionIndex: 0,
     score: 0,
     answers: [],
-  };
+  });
 
   openQuizModal();
 
@@ -1699,38 +1690,42 @@ function shuffleArray(array) {
 }
 
 function startQuizTimer(topicKey) {
-  clearInterval(quizTimerInterval);
-  quizStartTime = Date.now();
+  clearInterval(QuizManager.state.timerInterval);
+
+  QuizManager.state.startTime = Date.now();
 
   updateQuizTimerDisplay(topicKey);
 
-  quizTimerInterval = setInterval(() => {
+  QuizManager.state.timerInterval = setInterval(() => {
     updateQuizTimerDisplay(topicKey);
   }, 1000);
 }
 
 function stopQuizTimer() {
-  clearInterval(quizTimerInterval);
+  clearInterval(QuizManager.state.timerInterval);
 
-  const elapsedSeconds = Math.floor((Date.now() - quizStartTime) / 1000);
-
-  return elapsedSeconds;
+  return Math.floor(
+    (Date.now() - QuizManager.state.startTime) / 1000
+  );
 }
 
 function updateQuizTimerDisplay(topicKey) {
   const timerEl = document.getElementById("quizTimer");
-
   const bestTimeEl = document.getElementById("bestQuizTime");
 
   if (!timerEl || !bestTimeEl) return;
 
-  const elapsedSeconds = Math.floor((Date.now() - quizStartTime) / 1000);
+  const elapsedSeconds = Math.floor(
+    (Date.now() - QuizManager.state.startTime) / 1000
+  );
 
   timerEl.textContent = formatQuizTime(elapsedSeconds);
 
   const bestTime = userProgress.bestQuizTimes[topicKey];
 
-  bestTimeEl.textContent = bestTime ? formatQuizTime(bestTime) : "--:--";
+  bestTimeEl.textContent = bestTime
+    ? formatQuizTime(bestTime)
+    : "--:--";
 }
 
 function formatQuizTime(seconds) {
@@ -1744,11 +1739,44 @@ function formatQuizTime(seconds) {
 }
 
 // Quiz Modal
-let currentQuiz = null;
-let lastQuizReview = null;
-let lastQuizResultData = null;
-let quizStartTime = null;
-let quizTimerInterval = null;
+const QuizManager = {
+  state: {
+    currentQuiz: null,
+    reviewData: null,
+    resultData: null,
+    startTime: null,
+    timerInterval: null,
+    status: "idle",
+  },
+
+  reset() {
+    this.state.currentQuiz = null;
+    this.state.reviewData = null;
+    this.state.resultData = null;
+    this.state.startTime = null;
+    this.state.status = "idle";
+
+    if (this.state.timerInterval) {
+      clearInterval(this.state.timerInterval);
+      this.state.timerInterval = null;
+    }
+  },
+
+  start(quizData) {
+    this.state.currentQuiz = quizData;
+    this.state.status = "in-progress";
+  },
+
+  complete(reviewData, resultData) {
+    this.state.reviewData = reviewData;
+    this.state.resultData = resultData;
+    this.state.status = "completed";
+  },
+
+  getQuiz() {
+    return this.state.currentQuiz;
+  },
+};
 // let currentNotesProblemId = null; // duplicate declaration removed
 
 function openQuizModal() {
@@ -1793,23 +1821,21 @@ function closeQuizModal() {
     console.error("Error closing quiz modal:", e);
   }
 
-  clearInterval(quizTimerInterval);
-  currentQuiz = null;
+  QuizManager.reset();
 }
-
 
 function renderQuizQuestion() {
   console.log("renderQuizQuestion called");
-  console.log(currentQuiz);
+  console.log(quiz);
   if (
-    !currentQuiz ||
-    currentQuiz.currentQuestionIndex >= currentQuiz.questions.length
+    !quiz ||
+    quiz.currentQuestionIndex >= quiz.questions.length
   ) {
     finishQuiz();
     return;
   }
 
-  const question = currentQuiz.questions[currentQuiz.currentQuestionIndex];
+  const question = quiz.questions[quiz.currentQuestionIndex];
   const questionEl = document.getElementById("topicQuizQuestionText");
   const optionsEl = document.getElementById("topicQuizOptions");
   console.log("QUESTION =", question);
@@ -1819,11 +1845,11 @@ function renderQuizQuestion() {
   const counterEl = document.getElementById("topicQuizCounter");
 
   if (questionEl)
-    questionEl.textContent = `Q${currentQuiz.currentQuestionIndex + 1}: ${question.question}`;
+    questionEl.textContent = `Q${quiz.currentQuestionIndex + 1}: ${question.question}`;
   if (counterEl)
-    counterEl.textContent = `${currentQuiz.currentQuestionIndex + 1} / ${currentQuiz.questions.length}`;
+    counterEl.textContent = `${quiz.currentQuestionIndex + 1} / ${quiz.questions.length}`;
   if (progressEl)
-    progressEl.style.width = `${((currentQuiz.currentQuestionIndex + 1) / currentQuiz.questions.length) * 100}%`;
+    progressEl.style.width = `${((quiz.currentQuestionIndex + 1) / quiz.questions.length) * 100}%`;
 
   if (optionsEl) {
     optionsEl.innerHTML = question.options
@@ -1847,11 +1873,11 @@ function renderQuizQuestion() {
 }
 
 function selectQuizAnswer(selectedIndex) {
-  const question = currentQuiz.questions[currentQuiz.currentQuestionIndex];
+  const question = quiz.questions[quiz.currentQuestionIndex];
   const isCorrect = selectedIndex === question.correct;
 
   // Record answer
-  currentQuiz.answers.push({
+  quiz.answers.push({
     questionId: question.id,
     selected: selectedIndex,
     correct: question.correct,
@@ -1859,7 +1885,7 @@ function selectQuizAnswer(selectedIndex) {
   });
 
   if (isCorrect) {
-    currentQuiz.score++;
+    quiz.score++;
   }
 
   // Highlight selection
@@ -1876,15 +1902,15 @@ function selectQuizAnswer(selectedIndex) {
 
   // Move to next question after delay
   setTimeout(() => {
-    currentQuiz.currentQuestionIndex++;
+    quiz.currentQuestionIndex++;
     renderQuizQuestion();
   }, 1200);
 }
 
 function finishQuiz() {
-  const topicKey = currentQuiz.topic;
-  const score = currentQuiz.score;
-  const total = currentQuiz.questions.length;
+  const topicKey = quiz.topic;
+  const score = quiz.score;
+  const total = quiz.questions.length;
   const percentage = Math.round((score / total) * 100);
   const completionTime = stopQuizTimer();
 
@@ -1920,7 +1946,7 @@ function finishQuiz() {
   document.getElementById("topicQuizQuestionText").style.display = "none";
   document.getElementById("topicQuizOptions").style.display = "none";
   console.log("RESULTS:", score, total, percentage, xpEarned, completionTime);
-  const reviewSnapshot = JSON.parse(JSON.stringify(currentQuiz));
+  const reviewSnapshot = JSON.parse(JSON.stringify(quiz));
   lastQuizReview = reviewSnapshot;
 lastQuizResultData = {
   score,
@@ -1945,7 +1971,7 @@ document.getElementById("topicQuizCounter").style.display = "none";
   updateDashboard();
   updateGamification();
   console.log("SAVING REVIEW");
-  console.log(currentQuiz);
+  console.log(quiz);
 }
 
 function showQuizResults(score, total, percentage, xpEarned, completionTime) {
