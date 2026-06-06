@@ -261,6 +261,48 @@ function getSession(req) {
   const cookies = parseCookies(req.headers.cookie || "");
   return verifySessionToken(cookies[SESSION_COOKIE]);
 }
+function normalizePathname(pathname) {
+  if (!pathname) return "/";
+  return pathname.replace(/\/+$/, "") || "/";
+}
+
+function isProtectedRoute(pathname) {
+  return protectedPaths.has(pathname);
+}
+
+function authorizeRequest(req, pathname) {
+  if (!isProtectedRoute(pathname)) {
+    return { authorized: true };
+  }
+
+  const session = getSession(req);
+
+  if (!session) {
+    return {
+      authorized: false,
+      redirectTo: `/login?next=${encodeURIComponent(pathname)}`,
+    };
+  }
+
+  return {
+    authorized: true,
+    session,
+  };
+}
+
+function validateRequest(req) {
+  const allowedMethods = ["GET", "POST"];
+
+  if (!allowedMethods.includes(req.method)) {
+    return {
+      valid: false,
+      status: 405,
+      message: "Method not allowed.",
+    };
+  }
+
+  return { valid: true };
+}
 
 async function handleApi(req, res, pathname) {
   if (pathname === "/api/session" && req.method === "GET") {
@@ -368,7 +410,17 @@ async function serveStatic(req, res, pathname) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    const pathname = decodeURIComponent(url.pathname);
+    const pathname = normalizePathname(
+      decodeURIComponent(url.pathname)
+    );
+
+    const requestValidation = validateRequest(req);
+
+    if (!requestValidation.valid) {
+      return sendJson(res, requestValidation.status, {
+        error: requestValidation.message,
+      });
+    }
 
     if (pathname.startsWith("/api/")) {
       return await handleApi(req, res, pathname);
@@ -378,8 +430,10 @@ const server = http.createServer(async (req, res) => {
       return redirect(res, "/login", { "Set-Cookie": clearSessionCookie() });
     }
 
-    if (protectedPaths.has(pathname) && !getSession(req)) {
-      return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
+    const authorization = authorizeRequest(req, pathname);
+
+    if (!authorization.authorized) {
+      return redirect(res, authorization.redirectTo);
     }
 
     return await serveStatic(req, res, pathname);
