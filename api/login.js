@@ -20,6 +20,9 @@ const SESSION_COOKIE = "aiv_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const PBKDF2_ITERATIONS = 210000;
 const PASSWORD_KEY_LENGTH = 32;
+const LOGIN_RATE_LIMIT = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginAttempts = new Map();
 
 function sessionSecret() { return process.env.SESSION_SECRET || "dev-only-change-me-with-SESSION_SECRET-before-deploying"; }
 function sign(v) { return crypto.createHmac("sha256", sessionSecret()).update(v).digest("base64url"); }
@@ -48,14 +51,78 @@ async function storeRememberSession(user) {
   } catch (e) { console.error(e); return null; }
 }
 
+function getClientIdentifier(req) {
+  return (
+    req.headers["x-forwarded-for"] ||
+    req.socket?.remoteAddress ||
+    "unknown"
+  );
+}
+
+function isRateLimited(identifier) {
+  const now = Date.now();
+
+  const attempts = loginAttempts.get(identifier) || [];
+
+  const recentAttempts = attempts.filter(
+    (time) => now - time < LOGIN_WINDOW_MS
+  );
+
+  loginAttempts.set(identifier, recentAttempts);
+
+  return recentAttempts.length >= LOGIN_RATE_LIMIT;
+}
+
+function recordLoginAttempt(identifier) {
+  const attempts = loginAttempts.get(identifier) || [];
+
+  attempts.push(Date.now());
+
+  loginAttempts.set(identifier, attempts);
+}
+
+async function normalizeAuthDelay() {
+  return new Promise((resolve) =>
+    setTimeout(resolve, 500)
+  );
+}
+
+function auditAuthEvent(event, email) {
+  console.log(
+    `[AUTH_AUDIT] ${event} | ${email} | ${new Date().toISOString()}`
+  );
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   try {
     const {email,password}=req.body;
     const cleanEmail=String(email||"").trim().toLowerCase(),pwd=String(password||"");
+    const clientId = getClientIdentifier(req);
+
+    if (isRateLimited(clientId)) {
+      await normalizeAuthDelay();
+
+      auditAuthEvent("RATE_LIMITED", cleanEmail);
+
+      return res.status(429).json({
+        error: "Authentication failed.",
+      });
+    }
     const users=await readUsers();
     const user=users.find(u=>u.email===cleanEmail);
-    if(!user||!passwordMatches(pwd,user.password))return res.status(401).json({error:"Invalid email or password."});
+    if (!user || !passwordMatches(pwd, user.password)) {
+      recordLoginAttempt(clientId);
+
+      await normalizeAuthDelay();
+
+      auditAuthEvent("FAILED_LOGIN", cleanEmail);
+
+      return res.status(401).json({
+        error: "Authentication failed.",
+      });
+    }
+    auditAuthEvent("SUCCESSFUL_LOGIN", cleanEmail);
     const token=createSessionToken(user);
     const rememberToken = await storeRememberSession(user);
     const headers = { "Set-Cookie": sessionCookie(token) };
